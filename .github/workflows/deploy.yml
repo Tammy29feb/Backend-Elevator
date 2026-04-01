@@ -1,0 +1,72 @@
+name: Deploy Backend to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 60s
+          script: |
+            set -e
+            
+            # Ensure target directory exists
+            mkdir -p /home/ubuntu/Backend-Elevator/
+            cd /home/ubuntu/Backend-Elevator/
+            
+            # Clone or Update repository
+            if [ ! -d "Backend-Elevator" ]; then
+              git clone https://github.com/Tammy29feb/Backend-Elevator.git
+            fi
+            
+            cd Backend-Elevator
+            
+            # Auto-upgrade Node.js if version is below 20
+            if ! command -v node &> /dev/null; then
+              echo "Node.js is not installed. Installing Node 20..."
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            else
+              NODE_MAJOR=$(node -v | cut -d'.' -f1 | tr -d 'v')
+              if [ "$NODE_MAJOR" -lt 20 ]; then
+                echo "Server is on Node $NODE_MAJOR. Upgrading to Node 20..."
+                curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                sudo apt-get install -y nodejs
+              fi
+            fi
+            
+            # Ensure PM2 is installed
+            if ! command -v pm2 &> /dev/null; then
+              sudo npm install -g pm2
+            fi
+            
+            # Pull latest code
+            git fetch --all
+            git checkout main
+            git pull origin main
+            
+            # Create/Update .env file
+            echo "DATABASE_URL=\"${{ secrets.DATABASE_URL }}\"" > .env
+            echo "JWT_SECRET=\"${{ secrets.JWT_SECRET }}\"" >> .env
+            echo "PORT=5000" >> .env
+            
+            # Install dependencies
+            npm install
+            
+            # Force restart with PM2
+            pm2 delete backend || true
+            pm2 start server.js --name "backend"
+            pm2 save
